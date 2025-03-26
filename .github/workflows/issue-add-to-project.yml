@@ -1,0 +1,337 @@
+#======================================================================================
+# # リポジトリ上に追加されたIssueを自動的に指定のProjectに連携するAction
+# ## 事前準備
+#     * Repository > Settings > secrets and variables > Actions
+#         * MY_GITHUB_PAT: 管理者のアクセストークンを設定
+#         * PROJECT_ID   : 連携先のProjectのIDを設定
+#     * project-config.envにProject連携時のデフォルト設定を記載
+# ## 設定内容
+#     * Status : Backlog、ReadyToDo、Doing...
+#     * カテゴリ : 管理、開発...
+#     * start_date : Issueの開始日
+#     * due_date : Issueの完了予定日
+#======================================================================================
+name: Auto Add Issues to GenAIProject
+
+on:
+  issues:
+    types: [opened]
+
+env:
+  PROJECT_ID: ${{ secrets.PROJECT_ID }}
+
+jobs:
+  add_issue_to_project:
+    runs-on: ubuntu-latest
+    steps:
+      # リポジトリのコードをチェックアウト
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 環境変数をロード (project-config.env から設定)
+      - name: Load Environment Variables
+        run: |
+          set -a
+          source .github/workflows/project-config.env
+          set +a
+          echo "STATUS=$STATUS" >> $GITHUB_ENV
+          echo "CATEGORY=$CATEGORY" >> $GITHUB_ENV
+          echo "DUE_DATE_OFFSET=$DUE_DATE_OFFSET" >> $GITHUB_ENV
+
+      # Issue Form の本文から start_date, due_date を抽出する
+      - name: Extract Issue Body Date Fields
+        run: |
+          # GitHubイベントのペイロードから Issue 本文を取得
+          ISSUE_BODY=$(jq -r .issue.body "$GITHUB_EVENT_PATH")
+          echo "Issue Body: $ISSUE_BODY"
+          # ※以下の抽出方法は、Issue Form の出力形式に合わせて変更してください
+          EXTRACTED_START_DATE=$(echo "$ISSUE_BODY" | grep -E 'Start Date:' | sed -E 's/.*Start Date:[[:space:]]*//')
+          EXTRACTED_DUE_DATE=$(echo "$ISSUE_BODY" | grep -E 'Due Date:' | sed -E 's/.*Due Date:[[:space:]]*//')
+          echo "EXTRACTED_START_DATE=$EXTRACTED_START_DATE" >> $GITHUB_ENV
+          echo "EXTRACTED_DUE_DATE=$EXTRACTED_DUE_DATE" >> $GITHUB_ENV
+          echo "Extracted Start Date: $EXTRACTED_START_DATE"
+          echo "Extracted Due Date: $EXTRACTED_DUE_DATE"
+
+      # Issueの情報を取得
+      - name: Get Issue Information
+        run: echo "ISSUE_NODE_ID=${{ github.event.issue.node_id }}" >> $GITHUB_ENV
+
+      # Issue の作成者を Assignee に設定
+      - name: Assign Issue Creator
+        run: |
+          ISSUE_NUMBER=${{ github.event.issue.number }}
+          ISSUE_CREATOR=${{ github.event.issue.user.login }}
+          REPO=${{ github.repository }}
+
+          echo "Assigning $ISSUE_CREATOR to issue #$ISSUE_NUMBER in $REPO"
+
+          RESPONSE=$(curl -s -X POST -H "Authorization: Bearer ${{ secrets.MY_GITHUB_PAT }}" \
+               -H "Accept: application/vnd.github+json" \
+               -H "Content-Type: application/json" \
+               -d "{\"assignees\": [\"$ISSUE_CREATOR\"]}" \
+               https://api.github.com/repos/$REPO/issues/$ISSUE_NUMBER)
+
+          echo "API Response: $RESPONSE"
+
+      # Issue を GitHub Project に追加
+      - name: Add Issue to GitHub Project
+        run: |
+          ISSUE_NODE_ID=${{ env.ISSUE_NODE_ID }}
+
+          RESPONSE=$(curl -s -X POST -H "Authorization: Bearer ${{ secrets.MY_GITHUB_PAT }}" \
+               -H "Content-Type: application/json" \
+               --data @- https://api.github.com/graphql <<EOF
+          {
+            "query": "mutation {
+              addProjectV2ItemById(input: { projectId: \"$PROJECT_ID\", contentId: \"$ISSUE_NODE_ID\" }) {
+                item { id }
+              }
+            }"
+          }
+          EOF
+          )
+
+          echo "API Response: $RESPONSE"
+          ITEM_ID=$(echo "$RESPONSE" | jq -r '.data.addProjectV2ItemById.item.id')
+
+          if [ "$ITEM_ID" == "null" ] || [ -z "$ITEM_ID" ]; then
+            echo "Error: Could not retrieve ITEM_ID"
+            exit 1
+          fi
+
+          echo "ITEM_ID=$ITEM_ID" >> $GITHUB_ENV
+
+      # GitHub Project のカスタムフィールドを取得
+      - name: Get Project Fields
+        run: |
+          PROJECT_ID=${{ secrets.PROJECT_ID }}
+
+          FIELD_RESPONSE=$(curl -s -X POST -H "Authorization: Bearer ${{ secrets.MY_GITHUB_PAT }}" \
+             -H "Content-Type: application/json" \
+             --data @- https://api.github.com/graphql <<EOF
+          {
+            "query": "query {
+              node(id: \"$PROJECT_ID\") {
+                ... on ProjectV2 {
+                  fields(first: 20) {
+                    nodes {
+                      __typename
+                      ... on ProjectV2SingleSelectField { id name options { id name } }
+                      ... on ProjectV2Field { id name }
+                    }
+                  }
+                }
+              }
+            }"
+          }
+          EOF
+          )
+
+          echo "API Response: $FIELD_RESPONSE"
+
+          STATUS_FIELD_ID=$(echo "$FIELD_RESPONSE" | jq -r '.data.node.fields.nodes[]? | select(.name == "Status") | .id')
+          STATUS_OPTION_ID=$(echo "$FIELD_RESPONSE" | jq -r '.data.node.fields.nodes[]? | select(.name == "Status").options[]? | select(.name == "'"$STATUS"'" ) | .id')
+
+          START_DATE_FIELD_ID=$(echo "$FIELD_RESPONSE" | jq -r '.data.node.fields.nodes[]? | select(.name == "start_date") | .id')
+          DUE_DATE_FIELD_ID=$(echo "$FIELD_RESPONSE" | jq -r '.data.node.fields.nodes[]? | select(.name == "due_date") | .id')
+
+          CATEGORY_FIELD_ID=$(echo "$FIELD_RESPONSE" | jq -r '.data.node.fields.nodes[]? | select(.name == "カテゴリ") | .id')
+          CATEGORY_OPTION_ID=$(echo "$FIELD_RESPONSE" | jq -r '.data.node.fields.nodes[]? | select(.name == "カテゴリ").options[]? | select(.name == "'"$CATEGORY"'" ) | .id')
+
+          # 環境変数のバリデーション
+          if [ -z "$STATUS_FIELD_ID" ] || [ "$STATUS_FIELD_ID" == "null" ]; then
+            echo "Error: Could not retrieve Status Field ID"
+            exit 1
+          fi
+
+          if [ -z "$STATUS_OPTION_ID" ] || [ "$STATUS_OPTION_ID" == "null" ]; then
+            echo "Error: Could not retrieve Status Option ID"
+            exit 1
+          fi
+
+          if [ -z "$START_DATE_FIELD_ID" ] || [ "$START_DATE_FIELD_ID" == "null" ]; then
+            echo "Error: Could not retrieve Start Date Field ID"
+            exit 1
+          fi
+
+          if [ -z "$DUE_DATE_FIELD_ID" ] || [ "$DUE_DATE_FIELD_ID" == "null" ]; then
+            echo "Error: Could not retrieve Due Date Field ID"
+            exit 1
+          fi
+
+          if [ -z "$CATEGORY_FIELD_ID" ] || [ "$CATEGORY_FIELD_ID" == "null" ]; then
+            echo "Error: Could not retrieve カテゴリ Field ID"
+            exit 1
+          fi
+
+          if [ -z "$CATEGORY_OPTION_ID" ] || [ "$CATEGORY_OPTION_ID" == "null" ]; then
+            echo "Error: Could not retrieve カテゴリ Option ID"
+            exit 1
+          fi
+
+          echo "STATUS_FIELD_ID=$STATUS_FIELD_ID" >> $GITHUB_ENV
+          echo "STATUS_OPTION_ID=$STATUS_OPTION_ID" >> $GITHUB_ENV
+          echo "START_DATE_FIELD_ID=$START_DATE_FIELD_ID" >> $GITHUB_ENV
+          echo "DUE_DATE_FIELD_ID=$DUE_DATE_FIELD_ID" >> $GITHUB_ENV
+          echo "CATEGORY_FIELD_ID=$CATEGORY_FIELD_ID" >> $GITHUB_ENV
+          echo "CATEGORY_OPTION_ID=$CATEGORY_OPTION_ID" >> $GITHUB_ENV
+
+      # Issue の Status を設定
+      - name: Set Status
+        run: |
+          PROJECT_ID=${{ secrets.PROJECT_ID }}
+          ITEM_ID=${{ env.ITEM_ID }}
+          STATUS_FIELD_ID=${{ env.STATUS_FIELD_ID }}
+          STATUS_OPTION_ID=${{ env.STATUS_OPTION_ID }}
+
+          if [ -z "$STATUS_FIELD_ID" ] || [ "$STATUS_FIELD_ID" == "null" ]; then
+            echo "Error: STATUS_FIELD_ID is null or empty"
+            exit 1
+          fi
+
+          if [ -z "$STATUS_OPTION_ID" ] || [ "$STATUS_OPTION_ID" == "null" ]; then
+            echo "Error: STATUS_OPTION_ID is null or empty"
+            exit 1
+          fi
+
+          echo "Setting Status to $STATUS"
+
+          RESPONSE=$(curl -s -X POST -H "Authorization: Bearer ${{ secrets.MY_GITHUB_PAT }}" \
+               -H "Content-Type: application/json" \
+               --data @- https://api.github.com/graphql <<EOF
+          {
+            "query": "mutation {
+              updateProjectV2ItemFieldValue(input: {
+                projectId: \"$PROJECT_ID\",
+                itemId: \"$ITEM_ID\",
+                fieldId: \"$STATUS_FIELD_ID\",
+                value: { singleSelectOptionId: \"$STATUS_OPTION_ID\" }
+              }) {
+                projectV2Item { id }
+              }
+            }"
+          }
+          EOF
+          )
+
+          echo "Status Update Response: $RESPONSE"
+
+      # Issue のカテゴリを設定
+      - name: Set カテゴリ to 環境変数で指定された値
+        run: |
+          PROJECT_ID=${{ secrets.PROJECT_ID }}
+          ITEM_ID=${{ env.ITEM_ID }}
+          CATEGORY_FIELD_ID=${{ env.CATEGORY_FIELD_ID }}
+          CATEGORY_OPTION_ID=${{ env.CATEGORY_OPTION_ID }}
+
+          if [ -z "$CATEGORY_FIELD_ID" ] || [ "$CATEGORY_FIELD_ID" == "null" ]; then
+            echo "Error: CATEGORY_FIELD_ID is null or empty"
+            exit 1
+          fi
+
+          if [ -z "$CATEGORY_OPTION_ID" ] || [ "$CATEGORY_OPTION_ID" == "null" ]; then
+            echo "Error: CATEGORY_OPTION_ID is null or empty"
+            exit 1
+          fi
+
+          echo "Setting カテゴリ to $CATEGORY"
+
+          RESPONSE=$(curl -s -X POST -H "Authorization: Bearer ${{ secrets.MY_GITHUB_PAT }}" \
+               -H "Content-Type: application/json" \
+               --data @- https://api.github.com/graphql <<EOF
+          {
+            "query": "mutation {
+              updateProjectV2ItemFieldValue(input: {
+                projectId: \"$PROJECT_ID\",
+                itemId: \"$ITEM_ID\",
+                fieldId: \"$CATEGORY_FIELD_ID\",
+                value: { singleSelectOptionId: \"$CATEGORY_OPTION_ID\" }
+              }) {
+                projectV2Item { id }
+              }
+            }"
+          }
+          EOF
+          )
+
+          echo "カテゴリ Update Response: $RESPONSE"
+
+          # エラーハンドリング
+          if [[ "$RESPONSE" == *"\"errors\":"* ]]; then
+            echo "Error: Failed to update カテゴリ"
+            exit 1
+          fi
+
+      # Issue の Start Date と Due Date を設定（Issue Form から抽出した値を利用）
+      - name: Update Start Date and Due Date
+        run: |
+          PROJECT_ID=${{ secrets.PROJECT_ID }}
+          ITEM_ID=${{ env.ITEM_ID }}
+          START_DATE_FIELD_ID=${{ env.START_DATE_FIELD_ID }}
+          DUE_DATE_FIELD_ID=${{ env.DUE_DATE_FIELD_ID }}
+          # Issue Form で入力された日付を利用
+          START_DATE=${{ env.EXTRACTED_START_DATE }}
+          DUE_DATE=${{ env.EXTRACTED_DUE_DATE }}
+
+          # 入力がない場合はデフォルト値（例: 現在日、オフセット日）を設定
+          if [ -z "$START_DATE" ]; then
+            START_DATE=$(date -u +"%Y-%m-%d")
+            echo "Start Date not provided, using default: $START_DATE"
+          fi
+          if [ -z "$DUE_DATE" ]; then
+            DUE_DATE=$(date -u -d "+${DUE_DATE_OFFSET} days" +"%Y-%m-%d")
+            echo "Due Date not provided, using default: $DUE_DATE"
+          fi
+
+          # YYYYMMDD 形式の場合、ハイフン付きの形式 (YYYY-MM-DD) に変換する
+          if [[ "$START_DATE" =~ ^[0-9]{8}$ ]]; then
+            START_DATE=$(echo "$START_DATE" | sed -E 's/(....)(..)(..)/\1-\2-\3/')
+          fi
+          if [[ "$DUE_DATE" =~ ^[0-9]{8}$ ]]; then
+            DUE_DATE=$(echo "$DUE_DATE" | sed -E 's/(....)(..)(..)/\1-\2-\3/')
+          fi
+
+          echo "Setting Start Date: $START_DATE"
+          echo "Setting Due Date: $DUE_DATE"
+
+          RESPONSE=$(curl -s -X POST -H "Authorization: Bearer ${{ secrets.MY_GITHUB_PAT }}" \
+               -H "Content-Type: application/json" \
+               --data @- https://api.github.com/graphql <<EOF
+          {
+            "query": "mutation {
+              updateProjectV2ItemFieldValue(input: {
+                projectId: \"$PROJECT_ID\",
+                itemId: \"$ITEM_ID\",
+                fieldId: \"$START_DATE_FIELD_ID\",
+                value: { date: \"$START_DATE\" }
+              }) {
+                projectV2Item { id }
+              }
+            }"
+          }
+          EOF
+          )
+          echo "Start Date Update Response: $RESPONSE"
+
+          RESPONSE=$(curl -s -X POST -H "Authorization: Bearer ${{ secrets.MY_GITHUB_PAT }}" \
+               -H "Content-Type: application/json" \
+               --data @- https://api.github.com/graphql <<EOF
+          {
+            "query": "mutation {
+              updateProjectV2ItemFieldValue(input: {
+                projectId: \"$PROJECT_ID\",
+                itemId: \"$ITEM_ID\",
+                fieldId: \"$DUE_DATE_FIELD_ID\",
+                value: { date: \"$DUE_DATE\" }
+              }) {
+                projectV2Item { id }
+              }
+            }"
+          }
+          EOF
+          )
+          echo "Due Date Update Response: $RESPONSE"
+          if [[ "$RESPONSE" == *"\"errors\":"* ]]; then
+            echo "Error: Failed to update Due Date"
+            exit 1
+          fi

@@ -1,0 +1,74 @@
+name: Task Issue (Sub-Issue)
+description: メンバーがプロジェクトリーダーの Issue から作成する Sub-Issue 用テンプレート
+labels:
+  - task
+  - sub-issue
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🔍 **タスク詳細**
+        この Issue は、プロジェクトリーダーが作成した Issue から分割された **Sub-Issue** です。  
+        必要な情報を記載し、進捗を管理してください。
+        タスクの進行状況に応じてProjectsのStatusを更新してください。
+
+  - type: dropdown
+    id: case-selection
+    attributes:
+      label: 案件選択
+      description: |
+        この Issue に付与するラベルを選択してください。  
+      options:
+        - フロントエンド
+        - バックエンド
+        - インフラストラクチャ
+        - 管理
+    validations:
+      required: true
+
+  - type: dropdown
+    id: task-type
+    attributes:
+      label: タスクの種類
+      description: この Issue の作業の種類を選択してください。
+      options:
+        - 仕様調整
+        - 設計書執筆
+        - コーディング
+        - テスト
+        - ドキュメント作成
+    validations:
+      required: true
+
+  - type: textarea
+    id: task-detail
+    attributes:
+      label: 詳細な作業内容
+      description: タスクの具体的な内容を記載してください。
+      placeholder: |
+        - 認証コードの生成ロジックを設計
+        - API のエラーハンドリングを定義
+        - 仕様書を Google Drive にアップロード
+    validations:
+      required: true
+
+  - type: textarea
+    id: progress-tracking
+    attributes:
+      label: 進捗管理
+      description: タスクの進行状況を記録してください。  
+        ✅ **進捗があるたびにチェックを更新** してください！
+      placeholder: |
+        - [ ] 設計書の作成
+        - [ ] API のモック作成
+        - [ ] レビュー
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-info
+    attributes:
+      label: 追加情報 / 関連資料
+      description: 参考となる資料や関連情報があれば記載してください。
+    validations:
+      required: false

@@ -1,0 +1,22 @@
+#======================================================================================
+# # IssueTemplate中のidからlabelを設定するポリシーファイル
+# ## 事前準備
+#     * Actions(.github/workflows/issue-labeler.yml)を配置する
+#     * IssueTemplateを作成し、Actionsのmatrix及びポリシーファイルのtemplateに含める
+# ## 動作内容
+#     * 指定のIssueTemplateのidに設定されたkeysから紐づくlabelを設定する
+#======================================================================================
+policy:
+  - template: ["10_pl_template.yml", "20_member_template.yml"]
+    section:
+      - id: ["case-selection"]
+        block-list: []
+        label:
+          - name: case:frontend
+            keys: ["フロントエンド"]
+          - name: case:backend
+            keys: ["バックエンド"]
+          - name: case:infrastructure
+            keys: ["インフラストラクチャ"]
+          - name: case:management
+            keys: ["管理"]

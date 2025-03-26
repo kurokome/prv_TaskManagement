@@ -1,0 +1,66 @@
+name: Feature Request / Requirement Definition
+description: プロジェクトリーダーが機能追加や要件を整理するためのテンプレート
+labels:
+  - issue
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🎯 **目的**
+        この Issue は、新機能追加または要件の整理を行うためのものです。  
+        チームメンバーが Sub-Issue を作成しやすいように、できるだけ詳細な情報を記述してください。
+        
+  - type: dropdown
+    id: case-selection
+    attributes:
+      label: 案件選択
+      description: |
+        この Issue に付与するラベルを選択してください。  
+      options:
+        - フロントエンド
+        - バックエンド
+        - インフラストラクチャ
+        - 管理
+    validations:
+      required: true
+      
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景 / 目的
+      description: この機能を追加・変更する理由を説明してください。
+      placeholder: "例: ユーザーのセキュリティ強化のために2段階認証を導入する"
+    validations:
+      required: true
+
+  - type: textarea
+    id: requirements
+    attributes:
+      label: 要件定義 / 仕様
+      description: 実装する機能の詳細な要件・仕様を記載してください。
+      placeholder: |
+        - 認証コードはメールまたはSMSで送信
+        - 5分以内に認証しないと無効
+        - ユーザーが設定画面で2段階認証を有効/無効にできる
+    validations:
+      required: true
+
+  - type: textarea
+    id: tasks
+    attributes:
+      label: タスクの分解 (Sub-Issue 作成用)
+      description: メンバーが作成する Sub-Issue の参考となるように、具体的なタスクをリストアップしてください。
+      placeholder: |
+        - [ ] 認証コード送信APIの設計
+        - [ ] 2段階認証のフロントエンド実装
+        - [ ] 設定画面の追加
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-info
+    attributes:
+      label: 補足情報/関連資料
+      description: 参考となる資料や関連するIssueがあれば記載してください。
+    validations:
+      required: false

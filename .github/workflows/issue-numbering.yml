@@ -1,0 +1,126 @@
+#======================================================================================
+# # リポジトリ上に追加されたIssueタイトルに自動的に指定のPrefixを設定するAction
+# ## 事前準備
+#     * 不要
+# ## 設定内容
+#     * 親Issue :
+#           [${4桁にゼロパディングした親IssueNumber}]
+#     * 子Issue :
+#           [{4桁にゼロパディングした親Issue番号}~{子タスクの数+1 (2桁にゼロパディング)}]
+#======================================================================================
+name: Issue Numbering Prefix
+
+permissions:
+  issues: write
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  update-issue-title:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Issue Title with Numbering
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issueNumber = issue.number;
+            const originalTitle = issue.title;
+            
+            // すでにタイトルにプレフィックスが付いている場合はスキップする
+            if (/^[\d{4}(?:-\d+)?]/.test(originalTitle)) {
+              console.log("Title already prefixed. Skipping update.");
+              return;
+            }
+            
+            // ゼロパディング用の関数
+            function zeroPad(num, places) {
+              return String(num).padStart(places, '0');
+            }
+            
+            let parentIssueNumber = null;
+            
+            // GraphQLクエリでタイムラインのPARENT_ISSUE_ADDED_EVENTから親Issue番号を取得
+            const query = `
+              query($owner: String!, $repo: String!, $issueNumber: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  issue(number: $issueNumber) {
+                    timelineItems(first: 50, itemTypes: [PARENT_ISSUE_ADDED_EVENT]) {
+                      nodes {
+                        __typename
+                        ... on ParentIssueAddedEvent {
+                          parent {
+                            number
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `;
+            const variables = { owner, repo, issueNumber };
+            
+            try {
+              const result = await github.graphql(query, variables);
+              if (
+                result &&
+                result.repository &&
+                result.repository.issue &&
+                result.repository.issue.timelineItems &&
+                result.repository.issue.timelineItems.nodes.length > 0
+              ) {
+                for (const node of result.repository.issue.timelineItems.nodes) {
+                  if (node.__typename === "ParentIssueAddedEvent" && node.parent && node.parent.number) {
+                    parentIssueNumber = node.parent.number;
+                    console.log(`Detected parent relationship: Parent Issue #${parentIssueNumber}`);
+                    break;
+                  }
+                }
+              } else {
+                console.log("No parent issue relationship found in timeline.");
+              }
+            } catch (error) {
+              console.log("Error running GraphQL query:", error);
+            }
+            
+            if (parentIssueNumber) {
+              // 子Issueの場合：親Issue番号を元にプレフィックスを作成
+              const parentPrefix = zeroPad(parentIssueNumber, 4);
+              // 同じ親番号の子Issue件数を検索（タイトルに "[親番号~" が含まれているもの）
+              const queryString = `repo:${owner}/${repo} is:issue in:title "[${parentPrefix}~"`;
+              console.log(`Searching for child issues with query: ${queryString}`);
+              const searchResult = await github.rest.search.issuesAndPullRequests({
+                q: queryString
+              });
+              const childIssues = searchResult.data.items.filter(item => item.title.startsWith(`[${parentPrefix}~`));
+              const childCount = childIssues.length;
+              const newChildNumber = childCount + 1;
+              // 子番号を2桁でゼロパディング
+              const newPrefix = `[${parentPrefix}~${zeroPad(newChildNumber, 2)}] `;
+              const newTitle = newPrefix + originalTitle;
+              console.log(`Updating child issue title to: ${newTitle}`);
+              
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                title: newTitle
+              });
+            } else {
+              // 親Issueの場合：自分自身のIssue番号を元にプレフィックスを作成
+              const newPrefix = `[${zeroPad(issueNumber, 4)}] `;
+              const newTitle = newPrefix + originalTitle;
+              console.log(`Updating parent issue title to: ${newTitle}`);
+              
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                title: newTitle
+              });
+            }

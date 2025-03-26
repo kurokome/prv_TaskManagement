@@ -1,0 +1,38 @@
+#======================================================================================
+# # リポジトリ上に追加されたIssueにラベルを設定するAction
+# ## 事前準備
+#     * ポリシーファイル(.github/advanced-issue-labeler.yml)を配置する
+#     * IssueTemplateを作成し、本ファイルのmatrix及びポリシーファイルのtemplateに含める
+# ## 動作内容
+#     * 指定のIssueTemplateでIssueが作成された際に、ポリシーファイルを呼び出す
+#======================================================================================
+name: Issue Labeler
+on:
+  issues:
+    types: [ opened ]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  labeler:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        template: [ 10_pl_template.yml, 20_member_template.yml ]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Parse issue form
+        id: issue-parser
+        uses: stefanbuck/github-issue-parser@v3
+        with:
+          template-path: .github/ISSUE_TEMPLATE/${{ matrix.template }}
+
+      - name: Advanced Issue Labeler
+        uses: redhat-plumbers-in-action/advanced-issue-labeler@v3
+        with:
+          issue-form: ${{ steps.issue-parser.outputs.jsonString }}
+          template: ${{ matrix.template }}
+          token: ${{ secrets.GITHUB_TOKEN }}
