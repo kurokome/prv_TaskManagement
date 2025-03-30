@@ -11,7 +11,7 @@
 #     * start_date : Issueの開始日
 #     * due_date : Issueの完了予定日
 #======================================================================================
-name: Auto Add Issues to GenAIProject
+name: Auto Add Issues to Project
 
 on:
   issues:
@@ -76,7 +76,8 @@ jobs:
       # Issue を GitHub Project に追加
       - name: Add Issue to GitHub Project
         run: |
-          ISSUE_NODE_ID=${{ env.ISSUE_NODE_ID }}
+          echo "ISSUE_NODE_ID: $ISSUE_NODE_ID"
+          echo "PROJECT_ID: $PROJECT_ID"
 
           RESPONSE=$(curl -s -X POST -H "Authorization: Bearer ${{ secrets.MY_GITHUB_PAT }}" \
                -H "Content-Type: application/json" \
